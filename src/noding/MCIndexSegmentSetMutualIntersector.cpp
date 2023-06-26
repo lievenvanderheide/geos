@@ -16,6 +16,7 @@
 #include <geos/noding/SegmentSetMutualIntersector.h>
 #include <geos/noding/SegmentString.h>
 #include <geos/noding/SegmentIntersector.h>
+#include <geos/noding/SegmentIntersectionDetector.h>
 #include <geos/index/SpatialIndex.h>
 #include <geos/index/chain/MonotoneChain.h>
 #include <geos/index/chain/MonotoneChainBuilder.h>
@@ -56,15 +57,65 @@ MCIndexSegmentSetMutualIntersector::addToMonoChains(SegmentString* segStr)
 void
 MCIndexSegmentSetMutualIntersector::intersectChains()
 {
-    MCIndexSegmentSetMutualIntersector::SegmentOverlapAction overlapAction(*segInt);
+    SegmentIntersectionDetector* intersectionDetector = dynamic_cast<SegmentIntersectionDetector*>(segInt);
+    if(intersectionDetector) {
+        static std::mutex mutex;
+        mutex.lock();
 
-    for(auto& queryChain : monoChains) {
-        index.query(queryChain.getEnvelope(overlapTolerance), [&queryChain, &overlapAction, this](const MonotoneChain* testChain) -> bool {
-            queryChain.computeOverlaps(testChain, overlapTolerance, &overlapAction);
-            nOverlaps++;
+        auto time0 = std::chrono::high_resolution_clock::now();
 
-            return !segInt->isDone(); // abort early if segInt->isDone()
-        });
+        MCIndexSegmentSetMutualIntersector::SegmentOverlapAction overlapAction(*segInt);
+
+        for(auto& queryChain : monoChains) {
+            index.query(queryChain.getEnvelope(overlapTolerance), [&queryChain, &overlapAction, this, intersectionDetector](const MonotoneChain* testChain) -> bool {
+                queryChain.computeOverlaps(testChain, overlapTolerance, &overlapAction);
+                nOverlaps++;
+
+                return !segInt->isDone(); // abort early if segInt->isDone()
+            });
+        }
+
+        auto time1 = std::chrono::high_resolution_clock::now();
+
+        bool hasIntersection = false;
+        for(auto& queryChain : monoChains) {
+            index.query(queryChain.getEnvelope(0), [&queryChain, this, &hasIntersection](const MonotoneChain* testChain) -> bool {
+                // Note: It happens that this callback is still called after a previous iteration returned false. Is this a bug?
+                hasIntersection = hasIntersection || queryChain.intersects(*testChain);
+                return !hasIntersection;
+            });
+        }
+
+        auto time2 = std::chrono::high_resolution_clock::now();
+
+        if(hasIntersection != intersectionDetector->hasIntersection()) {
+            assert(!"Failed");
+        }
+
+        std::cout << "old time: " << (time1 - time0).count() << std::endl;
+        std::cout << "new time: " << (time2 - time1).count() << std::endl;
+        std::cout << std::endl;
+
+        static int64_t totalOldTime = 0;
+        static int64_t totalNewTime = 0;
+
+        totalOldTime += (time1 - time0).count();
+        totalNewTime += (time2 - time1).count();
+
+        std::cout << "avg ratio: " << static_cast<float>(totalNewTime) / static_cast<float>(totalOldTime) << std::endl;
+
+        mutex.unlock();
+    } else {
+        MCIndexSegmentSetMutualIntersector::SegmentOverlapAction overlapAction(*segInt);
+
+        for(auto& queryChain : monoChains) {
+            index.query(queryChain.getEnvelope(overlapTolerance), [&queryChain, &overlapAction, this](const MonotoneChain* testChain) -> bool {
+                queryChain.computeOverlaps(testChain, overlapTolerance, &overlapAction);
+                nOverlaps++;
+
+                return !segInt->isDone(); // abort early if segInt->isDone()
+            });
+        }
     }
 }
 
@@ -73,6 +124,18 @@ MCIndexSegmentSetMutualIntersector::intersectChains()
 void
 MCIndexSegmentSetMutualIntersector::setBaseSegments(SegmentString::ConstVect* segStrings)
 {
+    /*size_t j = 0;
+    for(const SegmentString* segStr : *segStrings) {
+        std::cout << "ConvexPolygon2 baseSegments" << j << "{" << std::endl;
+        for(size_t i = 0; i < segStr->size(); i++) {
+            geom::CoordinateXY vertex = segStr->getCoordinate<geom::CoordinateXY>(i);
+            std::cout << "\t{" << vertex.x << ", " << vertex.y << "}," << std::endl;
+        }
+        std::cout << "};" << std::endl;
+
+        j++;
+    }*/
+
     // NOTE - mloskot: const qualifier is removed silently, dirty.
 
     for(const SegmentString* css: *segStrings) {
@@ -87,6 +150,18 @@ MCIndexSegmentSetMutualIntersector::setBaseSegments(SegmentString::ConstVect* se
 void
 MCIndexSegmentSetMutualIntersector::process(SegmentString::ConstVect* segStrings)
 {
+    /*size_t j = 0;
+    for(const SegmentString* segStr : *segStrings) {
+        std::cout << "ConvexPolygon2 process" << j << "{" << std::endl;
+        for(size_t i = 0; i < segStr->size(); i++) {
+            geom::CoordinateXY vertex = segStr->getCoordinate<geom::CoordinateXY>(i);
+            std::cout << "\t{" << vertex.x << ", " << vertex.y << "}," << std::endl;
+        }
+        std::cout << "};" << std::endl;
+
+        j++;
+    }*/
+
     if (!indexBuilt) {
         for (auto& mc: indexChains) {
             index.insert(&(mc.getEnvelope(overlapTolerance)), &mc);

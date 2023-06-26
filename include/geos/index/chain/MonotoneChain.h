@@ -145,13 +145,21 @@ public:
     void computeOverlaps(const MonotoneChain* mc, double overlapTolerance,
                          MonotoneChainOverlapAction* mco) const;
 
+    /**
+     * Determines whether two monotone chains intersect.
+     */
+    bool intersects(const MonotoneChain& mc) const;
+
     void*
     getContext() const
     {
         return context;
     }
 
+    void printChain() const;
+
 private:
+    class RefiningIterator;
 
     void computeSelect(const geom::Envelope& searchEnv,
                        std::size_t start0,
