@@ -12,20 +12,20 @@
 
 namespace tut {
 // dummy data, not used
-struct test_monotonechain_data {
+struct test_monotonechainbuilder_data {
     geos::io::WKTReader wktreader;
     geos::io::WKTWriter wktwriter;
 
-    test_monotonechain_data()
+    test_monotonechainbuilder_data()
         :
         wktreader()
     {}
 };
 
-typedef test_group<test_monotonechain_data> group;
+typedef test_group<test_monotonechainbuilder_data> group;
 typedef group::object object;
 
-group test_monotonechain_group("geos::index::chain::MonotoneChainBuilder");
+group test_monotonechainbuilder_group("geos::index::chain::MonotoneChainBuilder");
 
 //
 // Test Cases
