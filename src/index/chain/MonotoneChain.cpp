@@ -24,7 +24,7 @@
 #include <geos/geom/LineSegment.h>
 #include <geos/geom/Envelope.h>
 #include <geos/util.h>
-#include <geos/util/IllegalArgumentException.h>
+#include <geos/util/Assert.h>
 #include <geos/algorithm/Orientation.h>
 
 #include <iomanip>
@@ -196,10 +196,10 @@ MonotoneChain::overlaps(const CoordinateXY& p1, const CoordinateXY& p2,
     return true;
 }
 
-class MonotoneChain::RefiningIterator
+class MonotoneChain::BisectableIterator
 {
 public:
-    RefiningIterator(const MonotoneChain& p_mc, bool forward);
+    BisectableIterator(const MonotoneChain& p_mc, bool forward);
 
     bool advance();
 
@@ -221,7 +221,7 @@ private:
     std::array<size_t, 64> stack;
 };
 
-MonotoneChain::RefiningIterator::RefiningIterator(const MonotoneChain& p_mc, bool forward)
+MonotoneChain::BisectableIterator::BisectableIterator(const MonotoneChain& p_mc, bool forward)
     : mc(p_mc)
     , index0(forward ? mc.start : mc.end)
     , index1(forward ? mc.end : mc.start)
@@ -231,7 +231,7 @@ MonotoneChain::RefiningIterator::RefiningIterator(const MonotoneChain& p_mc, boo
 {
 }
 
-bool MonotoneChain::RefiningIterator::advance()
+bool MonotoneChain::BisectableIterator::advance()
 {
     if(stackHead == 0) {
         return false;
@@ -248,7 +248,7 @@ bool MonotoneChain::RefiningIterator::advance()
     return true;
 }
 
-bool MonotoneChain::RefiningIterator::bisect()
+bool MonotoneChain::BisectableIterator::bisect()
 {
     if(index0 + 1 == index1 || index0 - 1 == index1) {
         return false;
@@ -289,30 +289,49 @@ bool MonotoneChain::intersects(const MonotoneChain& mc) const
         return cmpResult == 0;
     }
 
-    RefiningIterator it0(*this, chain0Forward);
-    RefiningIterator it1(mc, chain1Forward);
+    BisectableIterator it0(*this, chain0Forward);
+    BisectableIterator it1(mc, chain1Forward);
 
-    // Determines the ordering of 'point' relative to the chain corresponding to 'it'. This function advances/bisects
-    // 'it' as necessary. On return, the current vertices of 'it' will satisfy v0 <= point < v1.
-    auto getOrdering = [](RefiningIterator& it, const geom::CoordinateXY& point) -> int {
+    bool chain0BelowChain1;
+
+    {
+        bool advanceChain0 = left0.compareTo(left1) == -1;
+        BisectableIterator& advancingIt = advanceChain0 ? it0 : it1;
+        geom::CoordinateXY point = advanceChain0 ? left1 : left0;
+
         while(true) {
-            if(point.compareTo(it.getV1()) == -1) {
-                if(point.y < it.getV0().y && point.y < it.getV1().y) {
-                    return algorithm::Orientation::RIGHT;
-                } else if(point.y > it.getV0().y && point.y > it.getV1().y) {
-                    return algorithm::Orientation::LEFT;
-                } else if(!it.bisect()) {
-                    return algorithm::Orientation::index(it.getV0(), it.getV1(), point);
+            if(point.compareTo(advancingIt.getV1()) == -1) {
+                if(point.y < advancingIt.getV0().y && point.y < advancingIt.getV1().y) {
+                    chain0BelowChain1 = !advanceChain0;
+                    break;
+                } else if(point.y > advancingIt.getV0().y && point.y > advancingIt.getV1().y) {
+                    chain0BelowChain1 = advanceChain0;
+                    break;
+                } else if(!advancingIt.bisect()) {
+                    int ordering = algorithm::Orientation::index(advancingIt.getV0(), advancingIt.getV1(), point);
+                    if(ordering == algorithm::Orientation::COLLINEAR) {
+                        return true;
+                    }
+
+                    chain0BelowChain1 = advanceChain0
+                        ? (ordering == algorithm::Orientation::LEFT)
+                        : (ordering == algorithm::Orientation::RIGHT);
+                    break;
                 }
             } else {
-                if(!it.advance()) {
-                    throw util::IllegalArgumentException("The envelopes of the two monotone chains must overlap.");
-                }
+                bool advanceResult = advancingIt.advance();
+                util::Assert::isTrue(advanceResult);
             }
         }
-    };
+    }
 
-    auto iteration = [](RefiningIterator& advancingIt, RefiningIterator& otherIt, bool advancingBelowOther, bool& intersecting) {
+    while(true)
+    {
+        bool advanceChain0 = it0.getV1().compareTo(it1.getV1()) == -1;
+        BisectableIterator& advancingIt = advanceChain0 ? it0 : it1;
+        BisectableIterator& otherIt = advanceChain0 ? it1 : it0;
+        bool advancingBelowOther = advanceChain0 ? chain0BelowChain1 : !chain0BelowChain1;
+
         geom::CoordinateXY advancingV0 = advancingIt.getV0();
         geom::CoordinateXY advancingV1 = advancingIt.getV1();
         geom::CoordinateXY otherV0 = otherIt.getV0();
@@ -321,68 +340,32 @@ bool MonotoneChain::intersects(const MonotoneChain& mc) const
         if(advancingBelowOther) {
             if(advancingV1.y > std::max(otherV0.y, otherV1.y)) {
                 // advancingV1 is on the other side of the otherIt's current envelope, so there must be an intersection.
-                intersecting = true;
-                return false;
+                return true;
             } else if(std::max(advancingV0.y, advancingV1.y) >= std::min(otherV0.y, otherV1.y)) {
                 // The envelope of the advancing iterator and the other iterator intersect, so if possible, we should bisect,
                 // otherwise, we've reached the level of a segment, so we directly compare against that.
                 if(otherIt.bisect()) {
-                    return true;
+                    continue;
                 } else if(algorithm::Orientation::index(otherV0, otherV1, advancingV1) != algorithm::Orientation::RIGHT) {
-                    intersecting = true;
-                    return false;
+                    return true;
                 }
             }
         } else {
             if(advancingV1.y < std::min(otherV0.y, otherV1.y)) {
-                intersecting = true;
-                return false;
+                return true;
             } else if(std::min(advancingV0.y, advancingV1.y) <= std::max(otherV0.y, otherV1.y)) {
                 if(otherIt.bisect()) {
-                    return true;
+                    continue;
                 } else if(algorithm::Orientation::index(otherV0, otherV1, advancingV1) != algorithm::Orientation::LEFT) {
-                    intersecting = true;
-                    return false;
+                    return true;
                 }
             }
         }
 
-        intersecting = false;
-        return advancingIt.advance();
-    };
-
-    // The vertical ordering of the two chains at the current x-coordinate. If chain 0 is below chain 1, then this
-    // ordering is 1, if chain 0 is above chain 1 then this ordering is -1.
-    int ordering;
-    if(left0.compareTo(left1) == -1) {
-        ordering = getOrdering(it0, left1);
-    } else {
-        ordering = -getOrdering(it1, left0);
-    }
-
-    if(ordering == algorithm::Orientation::COLLINEAR) {
-        return true;
-    }
-
-    while(true)
-    {
-        if(it0.getV1().compareTo(it1.getV1()) == -1)
-        {
-            bool intersecting;
-            if(!iteration(it0, it1, ordering == algorithm::Orientation::LEFT, intersecting)) {
-                return intersecting;
-            }
-        }
-        else
-        {
-            bool intersecting;
-            if(!iteration(it1, it0, ordering == algorithm::Orientation::RIGHT, intersecting)) {
-                return intersecting;
-            }
+        if(!advancingIt.advance()) {
+            return false;
         }
     }
-
-    return false;
 }
 
 void MonotoneChain::printChain() const

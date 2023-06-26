@@ -22,6 +22,7 @@
 #include <geos/index/chain/MonotoneChainBuilder.h>
 #include <geos/index/chain/MonotoneChainOverlapAction.h>
 #include <geos/index/strtree/SimpleSTRtree.h>
+#include <geos/util/Assert.h>
 
 // std
 #include <cstddef>
@@ -81,16 +82,14 @@ MCIndexSegmentSetMutualIntersector::intersectChains()
         for(auto& queryChain : monoChains) {
             index.query(queryChain.getEnvelope(0), [&queryChain, this, &hasIntersection](const MonotoneChain* testChain) -> bool {
                 // Note: It happens that this callback is still called after a previous iteration returned false. Is this a bug?
-                hasIntersection = hasIntersection || queryChain.intersects(*testChain);
+                hasIntersection |= queryChain.intersects(*testChain);
                 return !hasIntersection;
             });
         }
 
         auto time2 = std::chrono::high_resolution_clock::now();
 
-        if(hasIntersection != intersectionDetector->hasIntersection()) {
-            assert(!"Failed");
-        }
+        util::Assert::isTrue(hasIntersection == intersectionDetector->hasIntersection());
 
         std::cout << "old time: " << (time1 - time0).count() << std::endl;
         std::cout << "new time: " << (time2 - time1).count() << std::endl;

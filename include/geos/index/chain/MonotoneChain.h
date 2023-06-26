@@ -159,7 +159,7 @@ public:
     void printChain() const;
 
 private:
-    class RefiningIterator;
+    class BisectableIterator;
 
     void computeSelect(const geom::Envelope& searchEnv,
                        std::size_t start0,
